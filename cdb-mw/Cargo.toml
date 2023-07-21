@@ -1,0 +1,27 @@
+[package]
+name = "cdb-mw"
+version = { workspace = true }
+edition = { workspace = true }
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]] # Bin to run the HelloWorld gRPC server
+name = "helloworld-server"
+path = "src/server.rs"
+
+[[bin]] # Bin to run the HelloWorld gRPC client
+name = "helloworld-client"
+path = "src/client.rs"
+
+
+[dependencies]
+raft-store = { path = "../raft-store" }
+rust-s3 = { workspace = true }
+tokio = { workspace = true }
+libc = { workspace = true }
+tonic = { workspace = true }
+prost = { workspace = true }
+clap = { workspace = true }
+
+[build-dependencies]
+tonic-build = { workspace = true }
