@@ -3,7 +3,7 @@ use std::fmt::Display;
 use std::path::Path;
 use std::sync::Arc;
 
-use openraft::error::CheckIsLeaderError;
+use openraft::error::{CheckIsLeaderError, ClientWriteError, RaftError};
 use openraft::raft::ClientWriteResponse;
 use openraft::Config;
 use openraft::Raft;
@@ -70,20 +70,27 @@ impl KVStore {
         KVStore { app }
     }
 
-    pub async fn start(&self, existing_node: Option<(NodeId, Node)>) {
-        if let Some(existing_node) = existing_node {
-            self.app
-                .raft
-                .add_learner(existing_node.0, existing_node.1, true)
-                .await
-                .unwrap();
+    pub async fn start(
+        &self,
+        existing_node: Option<(NodeId, Node)>,
+    ) -> Result<(), RaftError<NodeId, ClientWriteError<NodeId, Node>>> {
+        if let Some(leader) = existing_node {
+            let result = self.app.raft.add_learner(leader.0, leader.1, true).await;
+            if let Err(e) = result {
+                println!("Error: {:?}", e);
+            }
+            Ok(())
         } else {
             let mut nodes = BTreeMap::new();
             let node = Node {
                 grpc_addr: self.app.addr.clone(),
             };
             nodes.insert(self.app.id, node);
-            self.app.raft.initialize(nodes).await.unwrap();
+            let result = self.app.raft.initialize(nodes).await;
+            if let Err(e) = result {
+                println!("Error: {:?}", e);
+            }
+            Ok(())
         }
     }
 
