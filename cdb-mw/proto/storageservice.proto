@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package objectstorage;
+
+service ObjectStorageService {
+  rpc PutObjectS3(PutObjectS3Request) returns (OperationStatus);
+  rpc GetObjectS3(GetObjectS3Request) returns (ObjectData);
+
+  rpc PutObjectReference(PutObjectReferenceRequest) returns (OperationStatus);
+  rpc GetObjectReference(GetObjectReferenceRequest) returns (ObjectData);
+}
+
+message PutObjectS3Request {
+  string bucket = 1;
+  string objectKey = 2;
+  bytes data = 3;
+}
+
+message GetObjectS3Request {
+  string bucket = 1;
+  string objectKey = 2;
+}
+
+message PutObjectReferenceRequest {
+  string serverAddress = 1;
+  string objectKey = 2;
+  bytes data = 3;
+}
+
+message GetObjectReferenceRequest {
+  string serverAddress = 1;
+  string objectKey = 2;
+}
+
+message ObjectData {
+  bytes data = 1;
+}
+
+message OperationStatus {
+  enum Status {
+    SUCCESS = 0;
+    FAILURE = 1;
+  }
+  Status status = 1;
+  string message = 2;
+}
