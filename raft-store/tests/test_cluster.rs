@@ -1,173 +1,164 @@
-use std::backtrace::Backtrace;
-use std::panic::PanicInfo;
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::sync::Arc;
+    use std::time::Duration;
 
-use raft_store::raft::raft_proto::raft_server::RaftServer;
-use raft_store::raft::Raft;
-use raft_store::{Node, NodeId};
-use tonic::transport::Server;
+    use tokio::runtime::Runtime;
+    use tonic::transport::Server;
 
-pub fn log_panic(panic: &PanicInfo) {
-    let backtrace = { format!("{:?}", Backtrace::force_capture()) };
+    use raft_store::{KVStore, Node};
+    use raft_store::raft::Raft;
+    use raft_store::raft::raft_proto::raft_server::RaftServer;
 
-    eprintln!("{}", panic);
+// use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-    if let Some(location) = panic.location() {
-        eprintln!(
-            "{}:{}:{}",
-            location.file(),
-            location.line(),
-            location.column()
-        );
-    } else {
-        eprintln!("no location information available.");
-    }
+    #[test]
+    fn test_kvstore_integration() {
+        // tracing_subscriber::registry()
+        //     .with(fmt::layer())
+        //     .init();
 
-    eprintln!("{}", backtrace);
-}
+        let _ = fs::remove_dir_all("node1_data");
+        let _ = fs::remove_dir_all("node2_data");
+        let _ = fs::remove_dir_all("node3_data");
 
-/// Setup a cluster of 3 nodes.
-/// Write to it and read from it.
-#[async_std::test(flavor = "multi_thread", worker_threads = 8)]
-async fn test_cluster() -> Result<(), Box<dyn std::error::Error>> {
-    // --- The client itself does not store addresses for all nodes, but just node id.
-    //     Thus we need a supporting component to provide mapping from node id to node address.
-    //     This is only used by the client. A raft node in this example stores node addresses in its
-    // store.
-
-    std::panic::set_hook(Box::new(|panic| {
-        log_panic(panic);
-    }));
-
-    fn get_rpc_addr(node_id: u32) -> String {
-        match node_id {
-            1 => "127.0.0.1:22001".to_string(),
-            2 => "127.0.0.1:22002".to_string(),
-            3 => "127.0.0.1:22003".to_string(),
-            _ => panic!("node not found"),
-        }
-    }
-
-    // --- Start 3 raft node in 3 threads.
-    let d1 = tempfile::TempDir::new()?;
-    let d2 = tempfile::TempDir::new()?;
-    let d3 = tempfile::TempDir::new()?;
-
-    let n1 = Arc::new(Mutex::new(
-        raft_store::KVStore::new(1, d1.path(), get_rpc_addr(1)).await,
-    ));
-    let n1_clone = Arc::clone(&n1);
-
-    let _h1 = thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap(); // Create a new runtime
+        let rt = Runtime::new().unwrap();
 
         rt.block_on(async {
-            let mut server = Server::builder();
-            let raft_impl = Raft::create(n1_clone.lock().unwrap().app.clone());
+            // Initialize 3 nodes
+            println!("=== init nodes");
+            let node1 = Arc::new(KVStore::new(1, "node1_data", "0.0.0.0:50051".to_string(), true).await);
+            let node2 = Arc::new(KVStore::new(2, "node2_data", "0.0.0.0:50052".to_string(),
+                                              false).await);
+            let node3 = Arc::new(KVStore::new(3, "node3_data", "0.0.0.0:50053".to_string(),
+                                              false).await);
 
-            // Spawn server as a separate task
-            let server_task = tokio::spawn(
-                server
-                    .add_service(RaftServer::new(raft_impl))
-                    .serve(get_rpc_addr(1).parse().unwrap()),
-            );
+            // Start 3 servers
+            println!("=== start servers");
+            let n1_clone = node1.clone();
+            tokio::spawn(async move {
+                Server::builder()
+                    .add_service(RaftServer::new(Raft::create(n1_clone.app.clone())))
+                    .serve("127.0.0.1:50051".parse().unwrap())
+                    .await
+                    .unwrap();
+            });
 
-            // Start n1
-            n1_clone.lock().unwrap().start(None).await;
+            let n2_clone = node2.clone();
+            tokio::spawn(async move {
+                Server::builder()
+                    .add_service(RaftServer::new(Raft::create(n2_clone.app.clone())))
+                    .serve("127.0.0.1:50052".parse().unwrap())
+                    .await
+                    .unwrap();
+            });
 
-            // Wait for the server task to complete
-            if let Err(e) = server_task.await {
-                eprintln!("Server task failed: {:?}", e);
+            let n3_clone = node3.clone();
+            tokio::spawn(async move {
+                Server::builder()
+                    .add_service(RaftServer::new(Raft::create(n3_clone.app.clone())))
+                    .serve("127.0.0.1:50053".parse().unwrap())
+                    .await
+                    .unwrap();
+            });
+            // Pause a bit to ensure servers start (not ideal, but simple for demonstration)
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+            match node1.app.raft.add_learner(2, Node {
+                grpc_addr: "127.0.0.1:50052".to_string(),
+            }, true).await {
+                Ok(_) => println!("add learner success"),
+                Err(e) => println!("add learner error: {:?}", e),
             }
-        });
-    });
 
-    let n2 = Arc::new(Mutex::new(
-        raft_store::KVStore::new(2, d2.path(), get_rpc_addr(2)).await,
-    ));
-    let n2_clone = Arc::clone(&n2);
-
-    let _h2 = thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap(); // Create a new runtime
-        rt.block_on(async {
-            // Use that runtime to block on the future
-            let mut server = Server::builder();
-            let raft_impl = Raft::create(n2_clone.lock().unwrap().app.clone());
-
-            // Spawn server as a separate task
-            let server_task = tokio::spawn(
-                server
-                    .add_service(RaftServer::new(raft_impl))
-                    .serve(get_rpc_addr(2).parse().unwrap()),
-            );
-
-            // Start n1
-            let existing_node: (NodeId, Node) = (
-                1,
-                Node {
-                    grpc_addr: get_rpc_addr(1),
-                },
-            );
-            n2_clone
-                .lock()
-                .unwrap()
-                .start(Some(existing_node))
-                .await
-                .expect("Start Failed");
-
-            // Wait for the server task to complete
-            if let Err(e) = server_task.await {
-                eprintln!("Server task failed: {:?}", e);
+            match node1.app.raft.add_learner(3, Node {
+                grpc_addr: "127.0.0.1:50053".to_string(),
+            }, true).await
+            {
+                Ok(_) => println!("add learner success"),
+                Err(e) => println!("add learner error: {:?}", e),
             }
+
+            // Change membership
+            println!("=== change membership");
+            let members = node1.app.raft.change_membership([1u64, 2u64, 3u64], false).await.unwrap();
+            let members = node1.app.raft.change_membership([1u64, 2u64, 3u64], false).await.unwrap();
+            println!("members: {:?}", members);
+
+
+            // let metrics = node1.app.raft.metrics().borrow().clone();
+            // dbg!(metrics);
+            // let metrics = node2.app.raft.metrics().borrow().clone();
+            // dbg!(metrics);
+
+            println!("=== write `foo=bar`");
+
+            node1.write("foo", "bar").await;
+
+            // --- Wait for a while to let the replication get done.
+
+            async_std::task::sleep(Duration::from_millis(200)).await;
+
+            // --- Read it on every node.
+
+            println!("=== read `foo` on node 1");
+            let value = node1.read("foo").await.unwrap();
+            assert_eq!(value, "bar");
+
+            println!("=== read `foo` on node 2");
+            let value = node2.read("foo").await.unwrap();
+            assert_eq!(value, "bar");
+
+            println!("=== read `foo` on node 3");
+            let value = node3.read("foo").await.unwrap();
+            assert_eq!(value, "bar");
+
+            // --- Write a new value on node 1.
+            println!("=== write `foo=baz` on node 1");
+            node1.write("foo", "baz").await;
+
+            // --- Wait for a while to let the replication get done.
+            async_std::task::sleep(Duration::from_millis(200)).await;
+
+            // --- Read it on every node.
+            println!("=== read `foo` on node 1");
+            let value = node1.read("foo").await.unwrap();
+            assert_eq!(value, "baz");
+
+            println!("=== read `foo` on node 2");
+            let value = node2.read("foo").await.unwrap();
+            assert_eq!(value, "baz");
+
+            println!("=== read `foo` on node 3");
+            let value = node3.read("foo").await.unwrap();
+            assert_eq!(value, "baz");
+
+            // --- Write a new value on node 2.
+            println!("=== write `foo=qux` on node 2");
+            node2.write("foo", "qux").await;
+
+            // --- Wait for a while to let the replication get done.
+            async_std::task::sleep(Duration::from_millis(200)).await;
+
+            // --- Read it on every node.
+            println!("=== read `foo` on node 1");
+            let value = node1.read("foo").await.unwrap();
+            assert_eq!(value, "qux");
+
+            println!("=== read `foo` on node 2");
+            let value = node2.read("foo").await.unwrap();
+            assert_eq!(value, "qux");
+            //
+            println!("=== read `foo` on node 3");
+            let value = node3.read("foo").await.unwrap();
+            assert_eq!(value, "qux");
         });
-    });
 
-    // Wait for server to start up.
-    async_std::task::sleep(Duration::from_millis(500)).await;
 
-    // --- Try to write some application data through the leader.
-
-    println!("=== write `foo=bar`");
-
-    n1.lock()
-        .unwrap()
-        .write("foo".to_string(), "bar".to_string())
-        .await;
-    // --- Wait for a while to let the replication get done.
-
-    async_std::task::sleep(Duration::from_millis(200)).await;
-
-    // --- Read it on every node.
-
-    println!("=== read `foo` on node 1");
-    let value = n1.lock().unwrap().read("foo").await.unwrap();
-    assert_eq!(value, "bar");
-
-    println!("=== read `foo` on node 2");
-    let value = n2.lock().unwrap().read("foo").await.unwrap();
-    assert_eq!(value, "bar");
-
-    println!("=== read `foo` on node 3");
-
-    // --- A write to non-leader will be automatically forwarded to a known leader
-
-    println!("=== read `foo` on node 2");
-
-    async_std::task::sleep(Duration::from_millis(200)).await;
-
-    // --- Read it on every node.
-
-    println!("=== read `foo` on node 1");
-
-    println!("=== read `foo` on node 2");
-
-    println!("=== read `foo` on node 3");
-
-    println!("=== consistent_read `foo` on node 1");
-
-    println!("=== consistent_read `foo` on node 2 MUST return CheckIsLeaderError");
-
-    Ok(())
+        // Clean up data directories
+        fs::remove_dir_all("node1_data").unwrap();
+        fs::remove_dir_all("node2_data").unwrap();
+        fs::remove_dir_all("node3_data").unwrap();
+    }
 }

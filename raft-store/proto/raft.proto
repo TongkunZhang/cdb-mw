@@ -6,6 +6,24 @@ service Raft {
   rpc AppendEntries(RaftRequest) returns (RaftReply);
   rpc InstallSnapshot(RaftRequest) returns (RaftReply);
   rpc Vote(RaftRequest) returns (RaftReply);
+  rpc Forward(RaftRequest) returns (RaftReply);
+
+  rpc Prepare(PrepareRequest) returns (JoinReply);
+  rpc Join(JoinRequest) returns (JoinReply);
+}
+
+message PrepareRequest {
+  string addr = 2;
+}
+
+message JoinRequest {
+  uint64 node_id = 1;
+  string addr = 2;
+}
+
+message JoinReply {
+  string error = 1;
+  uint64 node_id = 2;
 }
 
 message RaftRequest {

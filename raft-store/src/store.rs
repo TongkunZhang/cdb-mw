@@ -10,10 +10,8 @@ use async_std::sync::RwLock;
 use byteorder::BigEndian;
 use byteorder::ReadBytesExt;
 use byteorder::WriteBytesExt;
-use openraft::async_trait::async_trait;
-use openraft::storage::LogState;
-use openraft::storage::Snapshot;
 use openraft::AnyError;
+use openraft::async_trait::async_trait;
 use openraft::Entry;
 use openraft::EntryPayload;
 use openraft::ErrorSubject;
@@ -23,15 +21,17 @@ use openraft::RaftLogReader;
 use openraft::RaftSnapshotBuilder;
 use openraft::RaftStorage;
 use openraft::SnapshotMeta;
+use openraft::storage::LogState;
+use openraft::storage::Snapshot;
 use openraft::StorageError;
 use openraft::StorageIOError;
 use openraft::StoredMembership;
 use openraft::Vote;
 use rocksdb::ColumnFamily;
 use rocksdb::ColumnFamilyDescriptor;
+use rocksdb::DB;
 use rocksdb::Direction;
 use rocksdb::Options;
-use rocksdb::DB;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -120,7 +120,7 @@ fn sm_r_err<E: Error + 'static>(e: E) -> StorageError<NodeId> {
         ErrorVerb::Read,
         AnyError::new(&e),
     )
-    .into()
+        .into()
 }
 
 fn sm_w_err<E: Error + 'static>(e: E) -> StorageError<NodeId> {
@@ -129,7 +129,7 @@ fn sm_w_err<E: Error + 'static>(e: E) -> StorageError<NodeId> {
         ErrorVerb::Write,
         AnyError::new(&e),
     )
-    .into()
+        .into()
 }
 
 impl StateMachine {
@@ -184,7 +184,7 @@ impl StateMachine {
                 key.as_bytes(),
                 value.as_bytes(),
             )
-            .map_err(sm_w_err)?;
+                .map_err(sm_w_err)?;
         }
         let r = Self { db };
         if let Some(log_id) = sm.last_applied_log {
