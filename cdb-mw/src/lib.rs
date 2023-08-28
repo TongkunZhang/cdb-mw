@@ -1,15 +1,13 @@
-use s3::creds::Credentials;
-use s3::error::S3Error;
-use s3::Bucket;
-use s3::Region;
-use tokio::runtime::Runtime;
+mod app;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn it_works() {
+        use s3::Bucket;
+        use s3::creds::Credentials;
+        use s3::Region;
+        use tokio::runtime::Runtime;
         let bucket = Bucket::new(
             "bucket-1",
             Region::Custom {

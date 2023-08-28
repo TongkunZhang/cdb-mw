@@ -22,13 +22,12 @@ message GetObjectS3Request {
 }
 
 message PutObjectReferenceRequest {
-  string serverAddress = 1;
-  string objectKey = 2;
-  bytes data = 3;
+  string objectKey = 1;
+  string path = 2;
 }
 
 message GetObjectReferenceRequest {
-  string serverAddress = 1;
+  string hostname = 1;
   string objectKey = 2;
 }
 

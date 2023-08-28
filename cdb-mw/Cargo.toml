@@ -6,22 +6,25 @@ edition = { workspace = true }
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [[bin]] # Bin to run the HelloWorld gRPC server
-name = "helloworld-server"
-path = "src/server.rs"
+name = "shell"
+path = "src/shell.rs"
 
-[[bin]] # Bin to run the HelloWorld gRPC client
-name = "helloworld-client"
-path = "src/client.rs"
-
+[[bin]]
+name = "optics"
+path = "src/main.rs"
 
 [dependencies]
 raft-store = { path = "../raft-store" }
 rust-s3 = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
 libc = { workspace = true }
 tonic = { workspace = true }
 prost = { workspace = true }
 clap = { workspace = true }
+tempfile = { version = "3.7.0" }
+hostname = { version = "0.3.1" }
+async-std = { workspace = true }
+futures = { version = "0.3.28" }
 
 [build-dependencies]
 tonic-build = { workspace = true }
