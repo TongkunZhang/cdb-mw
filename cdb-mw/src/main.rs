@@ -1,26 +1,27 @@
+use clap::ArgGroup;
+use clap::Parser;
+use raft_store::raft::raft_proto::raft_client::RaftClient;
+use raft_store::raft::raft_proto::raft_server::RaftServer;
+use raft_store::raft::raft_proto::{JoinRequest, PrepareRequest};
+use raft_store::raft::Raft;
+use raft_store::KVStore;
 use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-
-use clap::ArgGroup;
-use clap::Parser;
 use tonic::transport::Server;
-
-use raft_store::KVStore;
-use raft_store::raft::Raft;
-use raft_store::raft::raft_proto::{JoinRequest, PrepareRequest};
-use raft_store::raft::raft_proto::raft_client::RaftClient;
-use raft_store::raft::raft_proto::raft_server::{Raft as RaftService, RaftServer};
+use tracing::{error, info};
+use tracing_subscriber;
+use tracing_subscriber::EnvFilter;
 
 use crate::app::{App, S3Config};
 use crate::services::file_transfer_service::file_transfer_proto::file_transfer_service_server::FileTransferServiceServer;
 use crate::services::file_transfer_service::FileTransferServiceImpl;
-use crate::services::object_storage_service::ObjectStorageServiceImpl;
 use crate::services::object_storage_service::storage_proto::object_storage_service_server::ObjectStorageServiceServer;
+use crate::services::object_storage_service::ObjectStorageServiceImpl;
 
-mod services;
 mod app;
+mod services;
 
 /// OPTICS
 #[derive(Parser, Debug)]
@@ -72,11 +73,21 @@ struct Args {
     s3_bucket: String,
 
     /// The S3 secret access key. If not set, it will be read from the S3_SECRET_KEY environment variable
-    #[arg(long = "s3-secret-key", env = "S3_SECRET_KEY", hide_env_values = true, value_name = "secret_key")]
+    #[arg(
+        long = "s3-secret-key",
+        env = "S3_SECRET_KEY",
+        hide_env_values = true,
+        value_name = "secret_key"
+    )]
     s3_secret_key: String,
 
     /// The S3 access key id. If not set, it will be read from the S3_ACCESS_KEY_ID environment variable
-    #[arg(long = "s3-access-key-id", env = "S3_ACCESS_KEY_ID", hide_env_values = true, value_name = "access_key_id")]
+    #[arg(
+        long = "s3-access-key-id",
+        env = "S3_ACCESS_KEY_ID",
+        hide_env_values = true,
+        value_name = "access_key_id"
+    )]
     s3_access_key_id: String,
 }
 
@@ -119,25 +130,36 @@ impl Args {
 
         if self.hostname.is_none() {
             // If `hostname` is not provided, set it to the hostname of the current machine.
-            self.hostname = Some(hostname::get().expect("Failed to get hostname").into_string().unwrap());
+            self.hostname = Some(
+                hostname::get()
+                    .expect("Failed to get hostname")
+                    .into_string()
+                    .unwrap(),
+            );
         }
     }
 }
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt()
+        .with_target(true)
+        .with_thread_ids(true)
+        .with_level(true)
+        .with_ansi(true)
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+
     let mut args = Args::parse();
 
     if let Err(e) = args.validate() {
         // Handle the validation error.
-        eprintln!("Validation error: {}", e);
+        error!("Validation error: {}", e);
         std::process::exit(1);
     }
 
-
     args.set_defaults();
-    println!("{:?}", args);
-
+    info!("Parsed arguments: {:?}", args);
     let _ = start(args).await;
     ()
 }
@@ -152,8 +174,22 @@ async fn start(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 
     let shared_state = App {
         hostname: args.hostname.clone().unwrap(),
-        addr: format!("{}:{}", args.hostname.as_deref().unwrap_or("localhost"), args.listen_port),
-        store: KVStore::new(node_id, args.data_dir.unwrap(), format!("{}:{}", args.hostname.as_deref().unwrap_or("localhost"), args.listen_port), node_id == 1).await,
+        addr: format!(
+            "{}:{}",
+            args.hostname.as_deref().unwrap_or("localhost"),
+            args.listen_port
+        ),
+        store: KVStore::new(
+            node_id,
+            args.data_dir.unwrap(),
+            format!(
+                "{}:{}",
+                args.hostname.as_deref().unwrap_or("localhost"),
+                args.listen_port
+            ),
+            node_id == 1,
+        )
+        .await,
         s3_config: S3Config {
             endpoint: args.s3_endpoint,
             path_style: args.s3_path_style.unwrap_or(false),
@@ -178,13 +214,20 @@ async fn start(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             .await
     });
 
-    println!("Server listening on {}", listen_addr);
-
+    info!("Server initialized and listening on {}", listen_addr);
     if let Some(leader_addr) = args.join {
         async_std::task::sleep(Duration::from_millis(200)).await;
-        join_cluster(format!("{}:{}", args.hostname.as_deref().unwrap_or("localhost"), args.listen_port), node_id, &leader_addr).await?;
+        join_cluster(
+            format!(
+                "{}:{}",
+                args.hostname.as_deref().unwrap_or("localhost"),
+                args.listen_port
+            ),
+            node_id,
+            &leader_addr,
+        )
+        .await?;
     }
-
 
     // Block on the server task.
     server_handle.await??;
@@ -192,32 +235,34 @@ async fn start(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-
 async fn get_next_id_from_cluster(leader_addr: &String) -> Result<u64, Box<dyn Error>> {
-    println!("Get next id from cluster: {}", leader_addr);
+    info!("Get node_id from cluster: {}", leader_addr);
     let leader_addr = format!("http://{}", leader_addr);
     let mut client = RaftClient::connect(leader_addr.clone()).await?;
 
-    let request = tonic::Request::new(PrepareRequest { addr: "".to_string() });
+    let request = tonic::Request::new(PrepareRequest {
+        addr: "".to_string(),
+    });
 
     let response = client.prepare(request).await?;
     let node_id = response.into_inner().node_id;
-    println!("Got node_id: {}", node_id);
+    info!("Got node_id: {}", node_id);
     Ok(node_id)
 }
 
-async fn join_cluster(addr: String, node_id: u64, leader_addr: &String) -> Result<(), Box<dyn Error>> {
-    println!("Join cluster: {} {}", addr, node_id);
+async fn join_cluster(
+    addr: String,
+    node_id: u64,
+    leader_addr: &String,
+) -> Result<(), Box<dyn Error>> {
+    info!("Join cluster with node_id: {}", node_id);
     let leader_addr = format!("http://{}", leader_addr);
     let mut client = RaftClient::connect(leader_addr.clone()).await?;
 
-    let request = tonic::Request::new(JoinRequest {
-        node_id,
-        addr,
-    });
+    let request = tonic::Request::new(JoinRequest { node_id, addr });
 
     let response = client.join(request).await?;
     let node_id = response.into_inner().node_id;
-    println!("Got node_id: {}", node_id);
+    info!("Leader accepted node_id: {}", node_id);
     Ok(())
 }

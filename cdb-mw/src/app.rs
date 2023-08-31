@@ -1,5 +1,6 @@
 use raft_store::KVStore;
 
+#[allow(dead_code)]
 pub struct S3Config {
     pub endpoint: String,
     pub path_style: bool,
@@ -8,6 +9,7 @@ pub struct S3Config {
     pub access_key_id: String,
 }
 
+#[allow(dead_code)]
 pub struct App {
     pub hostname: String,
     pub addr: String,

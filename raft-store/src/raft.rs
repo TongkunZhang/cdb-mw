@@ -3,10 +3,10 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
 use crate::app::App;
-use crate::Node;
-use crate::raft::raft_proto::{JoinReply, JoinRequest, PrepareRequest, RaftReply, RaftRequest};
 use crate::raft::raft_proto::raft_server::Raft as RaftService;
-
+use crate::raft::raft_proto::{JoinReply, JoinRequest, PrepareRequest, RaftReply, RaftRequest};
+use crate::Node;
+use tracing::{error, info, instrument, trace};
 pub mod raft_proto {
     tonic::include_proto!("raft_proto");
 }
@@ -23,10 +23,12 @@ impl Raft {
 
 #[async_trait::async_trait]
 impl RaftService for Raft {
+    #[instrument(skip(self))]
     async fn append_entries(
         &self,
         request: Request<RaftRequest>,
     ) -> Result<Response<RaftReply>, Status> {
+        trace!("Received Append Entries request");
         let req = request.into_inner();
 
         let ae_req =
@@ -47,10 +49,12 @@ impl RaftService for Raft {
         Ok(Response::new(mes))
     }
 
+    #[instrument(skip(self))]
     async fn install_snapshot(
         &self,
         request: Request<RaftRequest>,
     ) -> Result<Response<RaftReply>, Status> {
+        trace!("Received Install Snapshot request");
         let req = request.into_inner();
 
         let is_req =
@@ -71,7 +75,9 @@ impl RaftService for Raft {
         Ok(Response::new(mes))
     }
 
+    #[instrument(skip(self))]
     async fn vote(&self, request: Request<RaftRequest>) -> Result<Response<RaftReply>, Status> {
+        trace!("Received Vote request");
         let req = request.into_inner();
 
         let v_req = serde_json::from_str(&req.data).map_err(|x| Status::internal(x.to_string()))?;
@@ -91,8 +97,9 @@ impl RaftService for Raft {
         Ok(Response::new(mes))
     }
 
+    #[instrument(skip(self))]
     async fn forward(&self, request: Request<RaftRequest>) -> Result<Response<RaftReply>, Status> {
-        println!("Receive forward request");
+        trace!("Received forward request");
         let req = request.into_inner();
 
         let v_req = serde_json::from_str(&req.data).map_err(|x| Status::internal(x.to_string()))?;
@@ -112,44 +119,64 @@ impl RaftService for Raft {
         Ok(Response::new(mes))
     }
 
-    async fn prepare(&self, _request: Request<PrepareRequest>) -> Result<Response<JoinReply>, Status> {
+    #[instrument(skip(self))]
+    async fn prepare(
+        &self,
+        _request: Request<PrepareRequest>,
+    ) -> Result<Response<JoinReply>, Status> {
+        trace!("Received Prepare request");
         let metrics = self.app.raft.metrics();
         let metrics = metrics.borrow();
 
         let nodes = metrics.membership_config.nodes();
         let node_id = nodes.max_by_key(|x| x.0).unwrap().0 + 1;
 
-        println!("Prepare: node_id: {}", node_id);
-
+        info!("Prepare: Assigning new node_id: {}", node_id);
         Ok(Response::new(JoinReply {
             error: "".to_string(),
             node_id,
         }))
     }
 
+    #[instrument(skip(self))]
     async fn join(&self, request: Request<JoinRequest>) -> Result<Response<JoinReply>, Status> {
+        trace!("Received Join request");
         let req = request.into_inner();
-        let existing_voters = self.app.raft.metrics().borrow().membership_config.membership().voter_ids();
+        let existing_voters = self
+            .app
+            .raft
+            .metrics()
+            .borrow()
+            .membership_config
+            .membership()
+            .voter_ids();
         let mut new_voters: Vec<u64> = Vec::new();
         for i in existing_voters {
             new_voters.push(i);
         }
         new_voters.push(req.node_id);
-        match self.app.raft.add_learner(req.node_id, Node {
-            grpc_addr: req.addr,
-        }, true).await
+        match self
+            .app
+            .raft
+            .add_learner(
+                req.node_id,
+                Node {
+                    grpc_addr: req.addr,
+                },
+                true,
+            )
+            .await
         {
             Ok(_) => {
-                println!("add learner success for node_id: {}", req.node_id);
+                info!("Join: Adding node_id: {}", req.node_id);
 
                 if let Ok(_) = self.app.raft.change_membership(new_voters, false).await {
-                    dbg!(self.app.raft.metrics());
                     Ok(Response::new(JoinReply {
                         error: "".to_string(),
                         node_id: req.node_id,
                     }))
                 } else {
-                    println!("failed to change membership for node_id: {}", req.node_id);
+                    error!("Failed to change membership");
                     Ok(Response::new(JoinReply {
                         error: "failed to change membership".to_string(),
                         node_id: req.node_id,
@@ -157,7 +184,7 @@ impl RaftService for Raft {
                 }
             }
             Err(e) => {
-                println!("add learner error: {:?}", e);
+                error!("Failed to add learner: {:?}", e);
                 Ok(Response::new(JoinReply {
                     error: e.to_string(),
                     node_id: req.node_id,
@@ -166,4 +193,3 @@ impl RaftService for Raft {
         }
     }
 }
-

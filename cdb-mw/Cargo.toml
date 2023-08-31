@@ -1,5 +1,5 @@
 [package]
-name = "cdb-mw"
+name = "optics"
 version = { workspace = true }
 edition = { workspace = true }
 
@@ -25,6 +25,8 @@ tempfile = { version = "3.7.0" }
 hostname = { version = "0.3.1" }
 async-std = { workspace = true }
 futures = { version = "0.3.28" }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [build-dependencies]
 tonic-build = { workspace = true }

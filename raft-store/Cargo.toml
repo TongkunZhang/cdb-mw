@@ -17,7 +17,8 @@ async-std = { workspace = true }
 async-trait = "0.1.36"
 byteorder = "1.4.3"
 tokio = { workspace = true }
-
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [build-dependencies]
 tonic-build = { workspace = true }

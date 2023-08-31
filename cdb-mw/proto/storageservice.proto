@@ -27,7 +27,6 @@ message PutObjectReferenceRequest {
 }
 
 message GetObjectReferenceRequest {
-  string hostname = 1;
   string objectKey = 2;
 }
 

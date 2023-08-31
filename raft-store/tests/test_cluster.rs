@@ -7,18 +7,17 @@ mod tests {
     use tokio::runtime::Runtime;
     use tonic::transport::Server;
 
-    use raft_store::{KVStore, Node};
-    use raft_store::raft::Raft;
     use raft_store::raft::raft_proto::raft_server::RaftServer;
+    use raft_store::raft::Raft;
+    use raft_store::{KVStore, Node};
 
-// use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
+    // use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
     #[test]
     fn test_kvstore_integration() {
         // tracing_subscriber::registry()
         //     .with(fmt::layer())
         //     .init();
-
         let _ = fs::remove_dir_all("node1_data");
         let _ = fs::remove_dir_all("node2_data");
         let _ = fs::remove_dir_all("node3_data");
@@ -28,11 +27,12 @@ mod tests {
         rt.block_on(async {
             // Initialize 3 nodes
             println!("=== init nodes");
-            let node1 = Arc::new(KVStore::new(1, "node1_data", "0.0.0.0:50051".to_string(), true).await);
-            let node2 = Arc::new(KVStore::new(2, "node2_data", "0.0.0.0:50052".to_string(),
-                                              false).await);
-            let node3 = Arc::new(KVStore::new(3, "node3_data", "0.0.0.0:50053".to_string(),
-                                              false).await);
+            let node1 =
+                Arc::new(KVStore::new(1, "node1_data", "0.0.0.0:50051".to_string(), true).await);
+            let node2 =
+                Arc::new(KVStore::new(2, "node2_data", "0.0.0.0:50052".to_string(), false).await);
+            let node3 =
+                Arc::new(KVStore::new(3, "node3_data", "0.0.0.0:50053".to_string(), false).await);
 
             // Start 3 servers
             println!("=== start servers");
@@ -65,16 +65,33 @@ mod tests {
             // Pause a bit to ensure servers start (not ideal, but simple for demonstration)
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
-            match node1.app.raft.add_learner(2, Node {
-                grpc_addr: "127.0.0.1:50052".to_string(),
-            }, true).await {
+            match node1
+                .app
+                .raft
+                .add_learner(
+                    2,
+                    Node {
+                        grpc_addr: "127.0.0.1:50052".to_string(),
+                    },
+                    true,
+                )
+                .await
+            {
                 Ok(_) => println!("add learner success"),
                 Err(e) => println!("add learner error: {:?}", e),
             }
 
-            match node1.app.raft.add_learner(3, Node {
-                grpc_addr: "127.0.0.1:50053".to_string(),
-            }, true).await
+            match node1
+                .app
+                .raft
+                .add_learner(
+                    3,
+                    Node {
+                        grpc_addr: "127.0.0.1:50053".to_string(),
+                    },
+                    true,
+                )
+                .await
             {
                 Ok(_) => println!("add learner success"),
                 Err(e) => println!("add learner error: {:?}", e),
@@ -82,10 +99,19 @@ mod tests {
 
             // Change membership
             println!("=== change membership");
-            let members = node1.app.raft.change_membership([1u64, 2u64, 3u64], false).await.unwrap();
-            let members = node1.app.raft.change_membership([1u64, 2u64, 3u64], false).await.unwrap();
+            let members = node1
+                .app
+                .raft
+                .change_membership([1u64, 2u64, 3u64], false)
+                .await
+                .unwrap();
+            let members = node1
+                .app
+                .raft
+                .change_membership([1u64, 2u64, 3u64], false)
+                .await
+                .unwrap();
             println!("members: {:?}", members);
-
 
             // let metrics = node1.app.raft.metrics().borrow().clone();
             // dbg!(metrics);
@@ -154,7 +180,6 @@ mod tests {
             let value = node3.read("foo").await.unwrap();
             assert_eq!(value, "qux");
         });
-
 
         // Clean up data directories
         fs::remove_dir_all("node1_data").unwrap();

@@ -2,11 +2,13 @@ use std::env;
 use std::fs;
 use std::io::{self, Write};
 
-use crate::services::object_storage_service::storage_proto::{GetObjectS3Request, PutObjectS3Request};
 use crate::services::object_storage_service::storage_proto::object_storage_service_client::ObjectStorageServiceClient;
+use crate::services::object_storage_service::storage_proto::{
+    GetObjectS3Request, PutObjectS3Request,
+};
 
-mod services;
 mod app;
+mod services;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -44,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let data = fs::read(file_path.trim())?;
 
                 let request = PutObjectS3Request {
-                    bucket: "".to_string(),  // This should probably be set dynamically
+                    bucket: "".to_string(), // This should probably be set dynamically
                     object_key: object_key.trim().to_string(),
                     data: data.into(),
                 };
@@ -64,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 io::stdin().read_line(&mut file_path)?;
 
                 let request = GetObjectS3Request {
-                    bucket: "".to_string(),  // This should probably be set dynamically
+                    bucket: "".to_string(), // This should probably be set dynamically
                     object_key: object_key.trim().to_string(),
                 };
 
@@ -83,34 +85,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut ref_value = String::new();
                 io::stdin().read_line(&mut ref_value)?;
 
-                print!("Putting object reference for key {} with path {}", object_key.trim(), ref_value.trim());
-                let request = services::object_storage_service::storage_proto::PutObjectReferenceRequest {
-                    object_key: object_key.trim().to_string(),
-                    path: ref_value.trim().to_string(),
-                };
+                print!(
+                    "Putting object reference for key {} with path {}",
+                    object_key.trim(),
+                    ref_value.trim()
+                );
+                let request =
+                    services::object_storage_service::storage_proto::PutObjectReferenceRequest {
+                        object_key: object_key.trim().to_string(),
+                        path: ref_value.trim().to_string(),
+                    };
 
-                let response = client.put_object_reference(tonic::Request::new(request)).await?;
+                let response = client
+                    .put_object_reference(tonic::Request::new(request))
+                    .await?;
                 println!("Response: {:?}", response);
             }
 
             "get_ref" => {
-                print!("Enter hostname of node that has the reference: ");
-                io::stdout().flush()?;
-                let mut hostname = String::new();
-                io::stdin().read_line(&mut hostname)?;
                 print!("Enter object key for which you want the reference: ");
                 io::stdout().flush()?;
                 let mut object_key = String::new();
                 io::stdin().read_line(&mut object_key)?;
 
-                println!("Getting object reference for key {} from node {}", object_key.trim(), hostname.trim());
+                println!("Getting object reference for key {}", object_key.trim());
 
-                let request = services::object_storage_service::storage_proto::GetObjectReferenceRequest {
-                    hostname,
-                    object_key: object_key.trim().to_string(),
-                };
+                let request =
+                    services::object_storage_service::storage_proto::GetObjectReferenceRequest {
+                        object_key: object_key.trim().to_string(),
+                    };
 
-                let response = client.get_object_reference(tonic::Request::new(request)).await?;
+                let response = client
+                    .get_object_reference(tonic::Request::new(request))
+                    .await?;
                 let data = response.into_inner().data;
 
                 let mut file_path = String::new();
@@ -119,8 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 io::stdin().read_line(&mut file_path)?;
                 fs::write(file_path.trim(), data)?;
                 println!("Object saved successfully!");
-
-            },
+            }
 
             "quit" => break,
             _ => println!("Unknown command!"),
