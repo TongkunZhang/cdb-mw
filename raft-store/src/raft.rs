@@ -3,10 +3,12 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
 use crate::app::App;
+use crate::raft::raft_proto::raft_client::RaftClient;
 use crate::raft::raft_proto::raft_server::Raft as RaftService;
 use crate::raft::raft_proto::{JoinReply, JoinRequest, PrepareRequest, RaftReply, RaftRequest};
 use crate::Node;
 use tracing::{error, info, instrument, trace};
+
 pub mod raft_proto {
     tonic::include_proto!("raft_proto");
 }
@@ -141,55 +143,95 @@ impl RaftService for Raft {
     #[instrument(skip(self))]
     async fn join(&self, request: Request<JoinRequest>) -> Result<Response<JoinReply>, Status> {
         trace!("Received Join request");
-        let req = request.into_inner();
-        let existing_voters = self
-            .app
-            .raft
-            .metrics()
-            .borrow()
-            .membership_config
-            .membership()
-            .voter_ids();
-        let mut new_voters: Vec<u64> = Vec::new();
-        for i in existing_voters {
-            new_voters.push(i);
-        }
-        new_voters.push(req.node_id);
-        match self
-            .app
-            .raft
-            .add_learner(
-                req.node_id,
-                Node {
-                    grpc_addr: req.addr,
-                },
-                true,
-            )
-            .await
-        {
-            Ok(_) => {
-                info!("Join: Adding node_id: {}", req.node_id);
+        let metrics_object = self.app.raft.metrics();
+        let metrics = metrics_object.borrow().clone();
+        if let Some(current_leader) = metrics.current_leader {
+            if metrics.id != current_leader {
+                info!("Join: Not a leader, forwarding to leader");
 
-                if let Ok(_) = self.app.raft.change_membership(new_voters, false).await {
-                    Ok(Response::new(JoinReply {
-                        error: "".to_string(),
-                        node_id: req.node_id,
-                    }))
-                } else {
-                    error!("Failed to change membership");
-                    Ok(Response::new(JoinReply {
-                        error: "failed to change membership".to_string(),
-                        node_id: req.node_id,
-                    }))
+                let members = metrics
+                    .membership_config
+                    .membership()
+                    .get_node(&current_leader);
+                match members {
+                    Some(node) => {
+                        let addr = format!("http://{}", node.grpc_addr);
+                        let mut client = RaftClient::connect(addr.clone())
+                            .await
+                            .expect("Failed to connect");
+                        let resp = client
+                            .join(request.into_inner())
+                            .await
+                            .expect("Failed to forward");
+                        info!("Forwarded join request to leader");
+                        return Ok(resp);
+                    }
+                    None => {
+                        error!("No leader found during join operation");
+                        return Ok(Response::new(JoinReply {
+                            error: "no leader found".to_string(),
+                            node_id: 0,
+                        }));
+                    }
+                }
+            } else {
+                let req = request.into_inner();
+                let existing_voters = self
+                    .app
+                    .raft
+                    .metrics()
+                    .borrow()
+                    .membership_config
+                    .membership()
+                    .voter_ids();
+                let mut new_voters: Vec<u64> = Vec::new();
+                for i in existing_voters {
+                    new_voters.push(i);
+                }
+                new_voters.push(req.node_id);
+                match self
+                    .app
+                    .raft
+                    .add_learner(
+                        req.node_id,
+                        Node {
+                            grpc_addr: req.addr,
+                        },
+                        true,
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        info!("Join: Adding node_id: {}", req.node_id);
+
+                        if let Ok(_) = self.app.raft.change_membership(new_voters, false).await {
+                            Ok(Response::new(JoinReply {
+                                error: "".to_string(),
+                                node_id: req.node_id,
+                            }))
+                        } else {
+                            error!("Failed to change membership");
+                            Ok(Response::new(JoinReply {
+                                error: "failed to change membership".to_string(),
+                                node_id: req.node_id,
+                            }))
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to add learner: {:?}", e);
+                        Ok(Response::new(JoinReply {
+                            error: e.to_string(),
+                            node_id: req.node_id,
+                        }))
+                    }
                 }
             }
-            Err(e) => {
-                error!("Failed to add learner: {:?}", e);
-                Ok(Response::new(JoinReply {
-                    error: e.to_string(),
-                    node_id: req.node_id,
-                }))
-            }
+        } else {
+            error!("No leader found during join operation");
+            return Ok(Response::new(JoinReply {
+                error: "no leader found".to_string(),
+                node_id: 0,
+            }));
         }
     }
 }
