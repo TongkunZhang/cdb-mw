@@ -1,19 +1,21 @@
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::SystemTime;
+
+use futures::Stream;
+use s3::{Bucket, Region};
+use s3::creds::Credentials;
+use tonic::{Request, Response, Status};
 use tracing::{error, info, instrument};
 
-use s3::creds::Credentials;
-use s3::{Bucket, Region};
-use tonic::{Request, Response, Status};
-
 use crate::app::App;
-use crate::services::file_transfer_service::file_transfer_proto::file_transfer_service_client::FileTransferServiceClient;
 use crate::services::file_transfer_service::file_transfer_proto::DownloadRequest;
-use crate::services::object_storage_service::storage_proto::object_storage_service_server::ObjectStorageService;
+use crate::services::file_transfer_service::file_transfer_proto::file_transfer_service_client::FileTransferServiceClient;
 use crate::services::object_storage_service::storage_proto::{
-    operation_status, GetObjectReferenceRequest, GetObjectS3Request, ObjectData, OperationStatus,
+    GetObjectReferenceRequest, GetObjectS3Request, ObjectData, operation_status, OperationStatus,
     PutObjectReferenceRequest, PutObjectS3Request,
 };
+use crate::services::object_storage_service::storage_proto::object_storage_service_server::ObjectStorageService;
 
 pub mod storage_proto {
     tonic::include_proto!("objectstorage");
@@ -29,16 +31,30 @@ impl ObjectStorageServiceImpl {
     }
 }
 
+
 #[tonic::async_trait]
 impl ObjectStorageService for ObjectStorageServiceImpl {
+    type GetObjectS3Stream = Pin<Box<dyn Stream<Item=Result<ObjectData, Status>> + Send + Sync>>;
+    type GetObjectReferenceStream = Pin<Box<dyn Stream<Item=Result<ObjectData, Status>> + Send + Sync>>;
+
     #[instrument(skip(self, request))]
     async fn put_object_s3(
         &self,
-        request: Request<PutObjectS3Request>,
+        request: Request<tonic::Streaming<PutObjectS3Request>>,
     ) -> Result<Response<OperationStatus>, Status> {
-        let request = request.into_inner();
+        let mut stream = request.into_inner();
 
-        info!(object_key = %request.object_key, "Putting object to S3");
+        let mut buffer = vec![];
+        // let mut bucket_name = String::new();
+        let mut object_key = String::new();
+
+        while let Some(req) = stream.message().await? {
+            buffer.extend(req.chunk);
+            // bucket_name = req.bucket.clone();
+            object_key = req.object_key.clone();
+        }
+
+        info!(object_key = %object_key, "Putting object to S3");
         // Create S3 bucket instance
         let credentials = Credentials::new(
             Some(&self.app.s3_config.access_key_id),
@@ -47,7 +63,7 @@ impl ObjectStorageService for ObjectStorageServiceImpl {
             None,
             None,
         )
-        .unwrap(); // Handle this better
+            .unwrap(); // Handle this better
         let region = Region::Custom {
             region: "".into(),
             endpoint: self.app.s3_config.endpoint.clone(),
@@ -58,7 +74,7 @@ impl ObjectStorageService for ObjectStorageServiceImpl {
         }
         // Put object to S3
         let response_data = bucket
-            .put_object(&request.object_key, &request.data)
+            .put_object(&object_key, &buffer)
             .await
             .map_err(|e| {
                 error!(reason = %e, "Failed to put object");
@@ -79,7 +95,7 @@ impl ObjectStorageService for ObjectStorageServiceImpl {
     async fn get_object_s3(
         &self,
         request: Request<GetObjectS3Request>,
-    ) -> Result<Response<ObjectData>, Status> {
+    ) -> Result<Response<Self::GetObjectS3Stream>, Status> {
         let request = request.into_inner();
 
         info!(object_key = %request.object_key, "Getting object from S3");
@@ -91,7 +107,7 @@ impl ObjectStorageService for ObjectStorageServiceImpl {
             None,
             None,
         )
-        .unwrap(); // Handle this better
+            .unwrap(); // Handle this better
         let region = Region::Custom {
             region: "".into(),
             endpoint: self.app.s3_config.endpoint.clone(),
@@ -110,9 +126,24 @@ impl ObjectStorageService for ObjectStorageServiceImpl {
             return Err(Status::internal("Failed to get object from S3"));
         }
 
-        Ok(Response::new(ObjectData {
-            data: response_data.as_slice().to_vec(),
-        }))
+        let object_data = response_data.as_slice().to_vec();
+
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+
+        // Spawning a new task to break the object into smaller chunks
+        tokio::spawn(async move {
+            const CHUNK_SIZE: usize = 1024;
+            for chunk in object_data.chunks(CHUNK_SIZE) {
+                let message = ObjectData {
+                    chunk: chunk.to_vec(),
+                };
+                tx.send(Ok(message)).await.unwrap();
+            }
+        });
+
+        Ok(Response::new(Box::pin(
+            tokio_stream::wrappers::ReceiverStream::new(rx),
+        )))
     }
 
     #[instrument(skip(self, request))]
@@ -153,7 +184,7 @@ impl ObjectStorageService for ObjectStorageServiceImpl {
     async fn get_object_reference(
         &self,
         request: Request<GetObjectReferenceRequest>,
-    ) -> Result<Response<ObjectData>, Status> {
+    ) -> Result<Response<Self::GetObjectReferenceStream>, Status> {
         let request = request.into_inner();
 
         let key = serialize_obj_ref_key(&request.object_key);
@@ -167,10 +198,26 @@ impl ObjectStorageService for ObjectStorageServiceImpl {
                 info!(object_key = %request.object_key, path = %path, "Getting object reference for key");
 
                 // Use addr to connect to the FileTransferService and get the file
-                let file_data = download_from_file_transfer_service(&addr, &path).await?;
 
-                // Return the data from the downloaded file
-                Ok(Response::new(ObjectData { data: file_data }))
+                let object_data = download_from_file_transfer_service(&addr, &path).await?;
+                let (tx, rx) = tokio::sync::mpsc::channel(100);
+                // Spawning a new task to break the object into smaller chunks
+                tokio::spawn(async move {
+                    const CHUNK_SIZE: usize = 1024;
+                    for chunk in object_data.chunks(CHUNK_SIZE) {
+                        let message = ObjectData {
+                            chunk: chunk.to_vec(),
+                        };
+                        if let Err(e) = tx.send(Ok(message)).await {
+                            error!(reason = %e, "Failed to send chunk");
+                            break;
+                        }
+                    }
+                });
+
+                Ok(Response::new(Box::pin(
+                    tokio_stream::wrappers::ReceiverStream::new(rx),
+                )))
             }
             Err(e) => Err(Status::internal(format!(
                 "Failed to get object reference: {}",

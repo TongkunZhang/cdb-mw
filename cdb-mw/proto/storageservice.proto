@@ -3,22 +3,22 @@ syntax = "proto3";
 package objectstorage;
 
 service ObjectStorageService {
-  rpc PutObjectS3(PutObjectS3Request) returns (OperationStatus);
-  rpc GetObjectS3(GetObjectS3Request) returns (ObjectData);
+  rpc PutObjectS3(stream PutObjectS3Request) returns (OperationStatus);
+  rpc GetObjectS3(GetObjectS3Request) returns (stream ObjectData);
 
   rpc PutObjectReference(PutObjectReferenceRequest) returns (OperationStatus);
-  rpc GetObjectReference(GetObjectReferenceRequest) returns (ObjectData);
+  rpc GetObjectReference(GetObjectReferenceRequest) returns (stream ObjectData);
 }
 
 message PutObjectS3Request {
-  string bucket = 1;
-  string objectKey = 2;
-  bytes data = 3;
+//  string bucket = 1;
+  string objectKey = 1;
+  bytes chunk = 2;
 }
 
 message GetObjectS3Request {
-  string bucket = 1;
-  string objectKey = 2;
+//  string bucket = 1;
+  string objectKey = 1;
 }
 
 message PutObjectReferenceRequest {
@@ -31,7 +31,7 @@ message GetObjectReferenceRequest {
 }
 
 message ObjectData {
-  bytes data = 1;
+  bytes chunk = 1;
 }
 
 message OperationStatus {

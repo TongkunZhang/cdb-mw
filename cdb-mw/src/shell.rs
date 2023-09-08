@@ -2,13 +2,17 @@ use std::env;
 use std::fs;
 use std::io::{self, Write};
 
-use crate::services::object_storage_service::storage_proto::object_storage_service_client::ObjectStorageServiceClient;
-use crate::services::object_storage_service::storage_proto::{
-    GetObjectS3Request, PutObjectS3Request,
-};
+// use tokio::task::JoinHandle;
 
-mod app;
-mod services;
+use optics::OpticsHandler;
+
+fn prompt_for_input(prompt: &str) -> Result<String, std::io::Error> {
+    let mut user_input = String::new();
+    print!("{}", prompt);
+    io::stdout().flush()?;
+    io::stdin().read_line(&mut user_input)?;
+    Ok(String::from(user_input.trim()))
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,111 +27,66 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let port = &args[2];
 
     let endpoint = format!("http://{}:{}", server_addr, port);
-    let mut client = ObjectStorageServiceClient::connect(endpoint).await?;
+    let mut handler = OpticsHandler::new(endpoint).await?;
+
+    // let mut background_tasks: Vec<JoinHandle<()>> = Vec::new();
 
     loop {
-        let mut input = String::new();
-        print!("Choose an action (put_s3/get_s3/put_ref/get_ref/quit): ");
-        io::stdout().flush()?;
-        io::stdin().read_line(&mut input)?;
+        let action = prompt_for_input("Choose an action (put_s3[_async]/get_s3[_async]/put_ref[_async]/get_ref[_async]/quit): ")?;
 
-        match input.trim() {
+        match action.trim() {
             "put_s3" => {
-                print!("Enter object key: ");
-                io::stdout().flush()?;
-                let mut object_key = String::new();
-                io::stdin().read_line(&mut object_key)?;
+                let object_key = prompt_for_input("Enter object key: ")?.trim().to_string();
+                let file_path = prompt_for_input("Enter file path to upload: ")?;
 
-                print!("Enter file path to upload: ");
-                io::stdout().flush()?;
-                let mut file_path = String::new();
-                io::stdin().read_line(&mut file_path)?;
-
-                let data = fs::read(file_path.trim())?;
-
-                let request = PutObjectS3Request {
-                    bucket: "".to_string(), // This should probably be set dynamically
-                    object_key: object_key.trim().to_string(),
-                    data: data.into(),
-                };
-
-                let response = client.put_object_s3(tonic::Request::new(request)).await?;
-                println!("Response: {:?}", response);
+                let data = fs::read(file_path.trim()).unwrap_or_else(|_| vec![]); // Handle the error as you see fit
+                handler.put_s3(object_key, data).await?;
             }
             "get_s3" => {
-                print!("Enter object key to retrieve: ");
-                io::stdout().flush()?;
-                let mut object_key = String::new();
-                io::stdin().read_line(&mut object_key)?;
+                let object_key = prompt_for_input("Enter object key: ")?;
+                let file_path = prompt_for_input("Enter file path to save retrieved object: ")?;
 
-                print!("Enter file path to save retrieved object: ");
-                io::stdout().flush()?;
-                let mut file_path = String::new();
-                io::stdin().read_line(&mut file_path)?;
+                let mut file = fs::File::create(file_path.trim())?;
 
-                let request = GetObjectS3Request {
-                    bucket: "".to_string(), // This should probably be set dynamically
-                    object_key: object_key.trim().to_string(),
-                };
+                let data = handler.get_s3(object_key).await?;
+                file.write_all(&data)?;
 
-                let response = client.get_object_s3(tonic::Request::new(request)).await?;
-                fs::write(file_path.trim(), response.into_inner().data)?;
                 println!("Object saved successfully!");
             }
             "put_ref" => {
-                print!("Enter object key: ");
-                io::stdout().flush()?;
-                let mut object_key = String::new();
-                io::stdin().read_line(&mut object_key)?;
-
-                print!("Enter reference value (e.g., URL or path): ");
-                io::stdout().flush()?;
-                let mut ref_value = String::new();
-                io::stdin().read_line(&mut ref_value)?;
+                let object_key = prompt_for_input("Enter object key: ")?;
+                let ref_value = prompt_for_input("Enter reference value (e.g., URL or path): ")?;
 
                 print!(
                     "Putting object reference for key {} with path {}",
                     object_key.trim(),
                     ref_value.trim()
                 );
-                let request =
-                    services::object_storage_service::storage_proto::PutObjectReferenceRequest {
-                        object_key: object_key.trim().to_string(),
-                        path: ref_value.trim().to_string(),
-                    };
-
-                let response = client
-                    .put_object_reference(tonic::Request::new(request))
-                    .await?;
-                println!("Response: {:?}", response);
+                handler.put_obj_ref(object_key.trim().to_string(), ref_value.trim().to_string()).await?;
             }
-
             "get_ref" => {
-                print!("Enter object key for which you want the reference: ");
-                io::stdout().flush()?;
-                let mut object_key = String::new();
-                io::stdin().read_line(&mut object_key)?;
+                let object_key = prompt_for_input("Enter object key: ")?;
+                let file_path = prompt_for_input("Enter file path to save retrieved object: ")?;
 
-                println!("Getting object reference for key {}", object_key.trim());
+                let mut file = fs::File::create(file_path.trim())?;
 
-                let request =
-                    services::object_storage_service::storage_proto::GetObjectReferenceRequest {
-                        object_key: object_key.trim().to_string(),
-                    };
+                let data = handler.get_obj_ref(object_key).await?;
+                file.write_all(&data)?;
 
-                let response = client
-                    .get_object_reference(tonic::Request::new(request))
-                    .await?;
-                let data = response.into_inner().data;
-
-                let mut file_path = String::new();
-                print!("Enter file path to save retrieved object: ");
-                io::stdout().flush()?;
-                io::stdin().read_line(&mut file_path)?;
-                fs::write(file_path.trim(), data)?;
                 println!("Object saved successfully!");
             }
-
+            // "put_s3_async" => {
+            //     let object_key = prompt_for_input("Enter object key: ")?.trim().to_string();
+            //     let file_path = prompt_for_input("Enter file path to upload: ")?;
+            //
+            //     let data = fs::read(file_path.trim()).unwrap_or_else(|_| vec![]); // Handle the error as you see fit
+            //     let task = tokio::spawn(async move {
+            //         handler.put_s3(object_key, data).await.unwrap();
+            //         println!("put_s3 operation for {} completed", object_key);
+            //     });
+            //
+            //     background_tasks.push(task);
+            // }
             "quit" => break,
             _ => println!("Unknown command!"),
         }
